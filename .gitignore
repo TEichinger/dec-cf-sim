@@ -1,0 +1,15 @@
+# ignore compiled python files
+*.pyc
+
+# ignore data files
+/data
+
+# ignore shell scripts
+*.sh
+
+# ignore pickle files
+*.pkl
+*.pk
+
+# ignore log files
+*.log
