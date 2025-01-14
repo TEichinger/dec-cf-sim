@@ -10,7 +10,10 @@ It allows to simulate distinct network topologies and study the emanating data d
 This simulation library has successfully been tested on
 
 * Python 3.8 on Ubuntu 20.04
-* Python 3.9 on MacOS 11.6
+
+```
+CAVEAT: This simulation will not run properly on MacOS 11.6, for the cornac library that we use to predict recommendation accuracy requires a linux system. All else will run properly.
+```
 
 ## 1. Setup
 
@@ -144,20 +147,38 @@ It holds information on
 * snapshot information of the database that gets collected over time           --> value[1] as the second element of a duple
 
 
+## 5. Remarks
+
+The results we report in our papers on the experiments <Static-G>, <Static-I>, <Dyn-S>, <Dyn-C>, <Dyn-R>, <Dyn-R&I>, and <DGD> *without* payload aggregation have been obtained by running the `/src/algorithms/DecCF.py` script for distinct parameter values. We use for instance <parameter_control_string> = <static> for <Static-G> and <Static-I> and <parameter_control_string> = <QS> for <Dyn-S> and <Dyn-C>. For <Dyn-R>, <Dyn-R&I>, and <DGD>, we use <parameter_control_string> = <DGT>, where fine-tuning is done in the respective parameter-control class located in `/src/parameter_control`.
+
+Whenever we used payload aggregation, we ran the script `/src/algorithms/DecShCFv2.py` for payload aggregation in the style of Shokri et al. (2008) RecSys, referred to as <DGD[MostSim]> in our PMCJ paper (see below), and the script `/src/algorithms/DecAggCFv5.py` for weighted payload aggregation, referred to as <DGD[WeighAvg]> in our PMCJ paper (see below).
+
+
 # Citation
 
-This library has been used to obtain the results reported in a researcher paper with the following bibtex entry:
+This library has been used to obtain the results reported in the following two research papers with the following bibtex entries:
 
 ```
-@inproceedings{Eichinger2023distributeddataminimization,
-	author ={Eichinger, Tobias and K\"{u}pper, Axel},
-	title ={Distributed Data Minimization for Decentralized Collaborative Filtering Systems},
-	year ={2023},
-	booktitle={Proceedings of the 24th International Conference On Distributed Computing And Networking (ICDCN)},
-	publisher = {ACM},
-	pages ={tbd},
-	doi ={tbd},
+@inproceedings{Eichinger2023ICDCN,
+  author = {Eichinger, Tobias and K\"{u}pper, Axel},
+  title = {Distributed Data Minimization for Decentralized Collaborative Filtering Systems},
+  year = {2023},
+  booktitle = {Proceedings of the 24th International Conference on Distributed Computing and Networking},
+  series = {ICDCN'23},
+  pages = {},
+  doi = {https://doi.org/10.1145/3571306.3571400},
 }
+@article{Eichinger2024PMCJ,
+	author = {Eichinger, Tobias and K\"{u}pper, Axel},
+	title = {On data minimization and anonymity in pervasive mobile-to-mobile recommender systems},
+	year = {2024},
+	journal = {Pervasive and Mobile Computing},
+	pages = {101951},
+	issn = {1574-1192},
+	doi = {https://doi.org/10.1016/j.pmcj.2024.101951},
+	url = {https://www.sciencedirect.com/science/article/pii/S1574119224000774},
+}
+
 ```
 
-If you use this library, please indicate this paper as a reference.
+If you use this library, we kindly request you indicate these papers as a reference.
