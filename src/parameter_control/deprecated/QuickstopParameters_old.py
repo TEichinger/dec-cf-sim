@@ -19,24 +19,12 @@ from cornac.models import MF, SVD#, PMF, BPR, UserKNN, ItemKNN, MCF, WMF, SVD, M
 from cornac.metrics import RMSE#, MAE, Precision, Recall, NDCG, AUC, MAP
 #from cornac.hyperopt import Discrete, GridSearch
 
-# for debugging:
-from mobility_models.AssignNMobility import AssignNMobility
+class QuickstopParameters(ParameterControlTemplate):
+	""" Class that defines a parameter control scheme in which users set their time horizon T to the current epoch if the performance differential is in (0,epsilon).
+	 	Users thus stop entering into any further contact as soon as their performance 'saturates'.
 
-
-class DistributedGradientTracking(ParameterControlTemplate):
-	""" Class that defines a Distributed Gradient Tracking (DGT) parameter control mechanism. DGT differs from Distributed Gradient Descent (DGD) in that we employ fixed gradients.
-		DGT has been used to address the speed-accuracy dilemma (source: Daneshmand et al. (2018) arXiv:1809.08694).
-
-		DistributedGradientTracking.update_parameters applies the following formula to update <self.graph> (that is time horizons of peers) and <self.dynamic_percentile_dict> (dissemination parameters of peers).
-
-		(I) UPDATE FORMULA:
-		####################
-																  _______________________________________________
-																 |                                               |
-		Delta p_u(t) = [beta_p * (p_u(t) - p_v(t))] - [alpha_p * | 1	, if   epsilon < |Delta performance(t)|  |]
-																 | 0	, else epsilon >=|Delta performance(t)|  |
-																 |_______________________________________________|
-																 						Î -> we call this the 'gradient'
+		NOTE that theta is static (does not change over time).
+		NOTE that T only changes once per user, once performance saturates.
 
 		HERE performance is a performance metric of your choice before and after collection. Observe how non-collection yields only an averaging effect!
 		HERE epsilon is a fixed positive float.
@@ -54,21 +42,16 @@ class DistributedGradientTracking(ParameterControlTemplate):
 	#################################
 	# 1. INITIALIZATION FUNCTIONS   #
 	#################################
-	def __init__(self, algorithm, val_df, alpha_dynamic_percentile, beta_dynamic_percentile, alpha_T, beta_T, epsilon, mobility_model = None):
+	def __init__(self, algorithm, val_df, epsilon, mobility_model = None):
 		# call the template's initialization
 		super().__init__(algorithm, val_df = val_df)
-		# update parameters
-		self.alpha_dynamic_percentile = alpha_dynamic_percentile
-		self.beta_dynamic_percentile = beta_dynamic_percentile
-		self.alpha_T     = alpha_T
-		self.beta_T     = beta_T
-		#
+
 		self.epsilon = epsilon
 
 		# parameter control string for future reference
-		self.parameter_control_string	= "DGT"
+		self.parameter_control_string	= "QS"
 
-		#
+		# validation
 		self.val_df = val_df
 		self.val_dfs = None # initialize variable for <list> of dataframes per peer (peers might not be initialized when this parameter	control model is initialized)
 
@@ -84,84 +67,24 @@ class DistributedGradientTracking(ParameterControlTemplate):
 	# 2. UPDATE SIMULATION PARAMETERS [MAIN FUNCTIONALITY] #
 	########################################################
 
-	def update_formula(self, param_1, param_2, alpha_p, beta_p, epsilon, delta_performance, min_param_1 = None, max_param_1 = None,\
-				none_gradient = 1, zero_gradient = -1, saturation_gradient = -1, non_saturation_gradient = 0, use_consensus_term = True):
+	def update_formula(self, time_horizon, epsilon, delta_performance, current_epoch):
 		"""
-		DGT:	none_gradient = 1, zero_gradient = -1, saturation_gradient = -1, non_saturation_gradient = 0, use_consensus_term = True
-		R&I:	none_gradient = 1, zero_gradient = -1, saturation_gradient = -1, non_saturation_gradient = 0, use_consensus_term = False
-		R  :	none_gradient = 1, zero_gradient =  0, saturation_gradient =  0, non_saturation_gradient = 0, use_consensus_term = False
-
-		Calculate the updated param_1 according to formula (I).
+		Set T = current_epoch only if performance saturates (delta_performance in (0,epsilon)).
 
 
 		Example:
-			param_control = DistributedGradientTracking(1,2)
-			old_param_1 = 4
-			old_param_2 = 5
-			alpha_p = 1.0
-			beta_p = 1.0
-			epsilon = 0.2
-			delta_performance = 0.3
 
-			Run:
-				>> new_param = param_control.update_formula(old_param_1, old_param_2, alpha_p, beta_p, epsilon, delta_performance)
-
-			Yields:
-				consensus_term  =  1.0
-				innovation term = -1.0
-				old param 1     =  4
-				old param 2     =  5
-				new param 1     =  4.0
-
-			[Option]: This function can be extended to return not only new_param_1 but also new_param_2.
-
-			REMARK	gradient = 0 indicates that the user still needs to collect more data (do not change parameters);
-					gradient = 1 indicates that the user can start decreasing data collection (change parameters).
 		"""
-		# consensus term
-		#################
-		if use_consensus_term:
-			consensus_term = beta_p * (param_2 - param_1)
-		else:
-			consensus_term = 0
-
-		# innovation term
-		##################
-		#
-		# We encode the strategies with which we create the innovation term as a four-tuple
-		# encoding the gradients to choose when
-		# 1. performance differential == None (nothing collected so far)
-		# 2. performance differential == 0 (no payload has been received in this epoch)
-		# 3. |performance differential| < epsilon (performance changes marginally - data collection saturates)
-		# 4. |performance differential| >= epsilon (performance changes largely - data collection does not saturate yet)
-		# We then denote by DGT[1,2,3,4] a Distributed Gradient Tracking parameter control mechansism
-		# in which uses
-		# 		* gradient of value 1 if nothing has been collected so far
-		# 		* gradient of value 2 if no payload has been received in this epoch
-		#		* gradient of value 3 if the performance saturates
-		# 		* gradient of value 4 if the performance does not yet saturate
+		# check saturation
 		if delta_performance is None: # if no evaluation is possible, this indicates that the user still needs to collect data!
-			gradient = none_gradient #0
-		elif abs(delta_performance) == 0: # no change in collected data
-			gradient = zero_gradient # 0
-		elif (abs(delta_performance)<epsilon ): # if performance differentials are small (< epsilon); change parameters to lower collection
-			gradient = saturation_gradient # 1
+			new_time_horizon = time_horizon
+		elif abs(delta_performance) == 0:
+			new_time_horizon = time_horizon
+		elif (0<abs(delta_performance)<epsilon): # if performance differentials are small (< epsilon); change parameters to lower collection
+			new_time_horizon = current_epoch
 		else: # if performance differentials are large; do not change parameters
-			gradient = non_saturation_gradient# 0
-
-		innovation_term = alpha_p * gradient
-		# delta_param = consensus_term + innovation_term
-		delta_param_1 = consensus_term + innovation_term
-		# new_param = param_1 + delta_param_1
-		new_param_1 = param_1 + delta_param_1
-
-		# check boundaries
-		if max_param_1 is not None:
-			new_param_1 = min(new_param_1, max_param_1)
-		if min_param_1 is not None:
-			new_param_1 = max(new_param_1, min_param_1)
-
-		return new_param_1
+			new_time_horizon = time_horizon
+		return new_time_horizon
 
 
 	def calculate_performance(self, k, train_data, test_data, use_bias, cornac_seed, model_string = "SVD", metric_string = "RMSE"):
@@ -272,47 +195,65 @@ class DistributedGradientTracking(ParameterControlTemplate):
 		#######################################################################
 		# (I.1) UPDATE the graph (time horizon T)
 		#######################################################################
+		# get current execution graph
+		current_graph = self.algorithm.get_graph()
+
+		# for every peer in self.algorithm.peers
 		# get the current time horizons
-		current_time_horizon_dict = self.algorithm.get_time_horizon_dict()
+		peer_Ts = [current_graph.T_of_peer(peer) for peer in self.algorithm.peers()] # ordered by self.algorithm.peers()
 		# calculate the new time horizon T_peer
-		new_time_horizon_dict = {}
+		#				   (peer1_T, peer2_T, self.alpha_T, self.beta_T, self.epsilon, delta_performances[self.algorithm.peers().index(peer)], min_param_1 = t)
+		new_peer_Ts = []
 		# CAVEAT Only consider integer values time horizons!
-		# TODO: Makes this clean, to work with arbitrary amounts of children
-		for peer in self.algorithm.peers():
-			# if there are no children (no connections in this epoch): only consider the innovation term for parameter update
-			if children_dict[peer] == []:
-				new_time_horizon_dict[peer] = int(self.update_formula(current_time_horizon_dict[peer], 0, \
-											self.alpha_T, 0, self.epsilon,  delta_performances[self.algorithm.peers().index(peer)], min_param_1 = 0))
-			# if there are children (connections in this epoch): consider both consensus and innovation terms for parameter update
-			else:
-				new_time_horizon_dict[peer] = int(self.update_formula(current_time_horizon_dict[peer], current_time_horizon_dict[children_dict[peer][0]], \
-											self.alpha_T, self.beta_T, self.epsilon,  delta_performances[self.algorithm.peers().index(peer)], min_param_1 = 0))
+		for peer, peer_T in zip(self.algorithm.peers(), peer_Ts):
+			new_peer_Ts.append(int(self.update_formula(peer_Ts[self.algorithm.peers().index(peer)], self.epsilon, delta_performances[self.algorithm.peers().index(peer)], t)))
 
-		# set new time horizons
-		self.algorithm.set_time_horizon_dict(new_time_horizon_dict)
+		# augment graph according to the novel time horizons, if users find that they should 'collect more', then they might need to add edges if <peer_Ts[peer]> < <new_peer_Ts[peer]>
+		# , that is if users find that they should 'collect more', then they might need to add edges if <peer_Ts[peer]> < <new_peer_Ts[peer]>
+		# CAVEAT this is not 'rewiring
+		# E.G. if peer_Ts = [3,3,3] and new_peer_Ts = [3,4,4]
+		# then this will invoke <self.algorithm.graph.mobility_model.generate_graph_at_t> and create edges for epoch t=4 according to the mobility_model beyond the previous max. time horizon 3.
+		# the novel time horizon thus becomes 4. Note that this code does not alter any edges before min(peer_Ts).
+		###################################################
+		# update time horizons; pruning may cause the current peer_Ts to be smaller than the new_peer_Ts
+		#peer_Ts = [current_graph.T_of_peer(peer) for peer in self.algorithm.peers()] # ordered by self.algorithm.peers()
+		# create peer_counter_df (the number of connections to sample for every peer at epoch t)
+		# initialize empty peer_counter_df [index: userIds]
+		peer_counter_df = pd.DataFrame(columns = ["counter"])
+		# for every epoch <t> in  <min(peer_Ts)> to <max(new_peer_Ts)>:
+		for t_for in range(min(peer_Ts),max(new_peer_Ts)+1,1):
+			# for every <peer> in <peers>
+			for peer in self.algorithm.peers():
+				# create vertex for <peer> at epoch <t>
+				self.algorithm.graph.add_vertex(peer+":"+str(t_for))
+
+				# DIESES IF IST NIE DER FALL bei quickstop
+				# if <peer_Ts[peer]> <  t_for <= new_peer_Ts[peer]: #
+				if peer_Ts[self.algorithm.peers().index(peer)] < t_for <= new_peer_Ts[self.algorithm.peers().index(peer)]:
+					# peer_counter_df[peer]+= self.mobility_model.N - <current_no_of_children_of_peer>
+					peer_counter_df.loc[peer,"counter"] = self.algorithm.graph.mobility_model.N - len(self.algorithm.graph.children(peer+":"+str(t_for)))
+
+			# augment graph according to the novel time horizon
+			current_graph, _ = self.algorithm.graph.mobility_model.generate_graph_at_t(current_graph, t_for, peer_counter_df, self.algorithm.graph.mobility_model.random_gen)
+		#"""
+
+		# set new execution graph
+		#########################
+		new_graph = current_graph
+		self.algorithm.set_graph(new_graph)
+
+		# update self.algorithm.min_local_time_horizon
+		self.algorithm.min_local_time_horizon = min(new_peer_Ts)
 
 		#######################################################################
-		# (I.2) UPDATE dynamic_percentile (dissemination parameter theta)
+		# (I.2) UPDATE dynamic_percentile (do not change dynamic_percentile)  #
 		#######################################################################
-		new_dynamic_percentile_dict = {}
-		for peer in self.algorithm.peers():
-
-			if children_dict[peer] == []:
-				# if there are no children (no connections in this epoch): only consider the innovation term for parameter update
-				new_dynamic_percentile_dict[peer] = self.update_formula(self.algorithm.dynamic_percentile_dict[peer], 0,\
-						self.alpha_dynamic_percentile, 0, self.epsilon, delta_performances[self.algorithm.peers().index(peer)], min_param_1 = 0.0, max_param_1 = 1.0)
-			else:
-				# if there are children (connections in this epoch): consider both consensus and innovation terms for parameter update
-				new_dynamic_percentile_dict[peer] = self.update_formula(self.algorithm.dynamic_percentile_dict[peer], self.algorithm.dynamic_percentile_dict[children_dict[peer][0]],\
-						self.alpha_dynamic_percentile, self.beta_dynamic_percentile, self.epsilon, delta_performances[self.algorithm.peers().index(peer)], min_param_1 = 0.0, max_param_1 = 1.0)
-
+		new_dynamic_percentile_dict = self.algorithm.get_dynamic_percentile_dict()
 		# set new dynamic percentiles
 		self.algorithm.set_dynamic_percentile_dict(new_dynamic_percentile_dict)
 
 		# (I.2.1) adjust min_sim_to_sender on the basis of the new dynamic percentiles
 		self.algorithm.initialize_min_sim_to_sender_dict()
-
-
 
 		return
 

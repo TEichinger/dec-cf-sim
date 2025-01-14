@@ -389,9 +389,9 @@ def make_initial_snapshot_string(dataset_string, traintest_seed, ttsplit_per_use
 
 	initial_snapshot_string += "_datasetstring={}".format(dataset_string)
 	if ttsplit_per_user:
-		initial_snapshot_string += "_traintestseed(p.u.)={}".format(traintest_seed)
+		initial_snapshot_string += "_ttseed(p.u.)={}".format(traintest_seed)
 	else:
-		initial_snapshot_string += "_traintestseed={}".format(traintest_seed)
+		initial_snapshot_string += "_ttseed={}".format(traintest_seed)
 
 	return initial_snapshot_string
 
@@ -461,7 +461,7 @@ def unmake_snapshot_info_string(snapshot_info_string):
 	result_dict["n_splits"] = n_splits
 
 	# traintest_seed
-	traintest_seed = extract_variable_from_info_string('traintestseed=[0-9]+', snapshot_info_string) #TODO: add per user mod "(p.u.)"
+	traintest_seed = extract_variable_from_info_string('ttseed=[0-9]+', snapshot_info_string) #TODO: add per user mod "(p.u.)"
 	if traintest_seed is not None:
 		traintest_seed = int(traintest_seed)
 	result_dict["traintest_seed"] = traintest_seed
@@ -563,9 +563,9 @@ def make_snapshot_info_string(topN, sim_string, dataset_string, graph_seed, n_sp
 		snapshot_info_string += "_nsplits={}".format(str(n_splits))
 	if traintest_seed is not None:
 		if ttsplit_per_user:
-			snapshot_info_string += "_traintestseed(p.u.)={}".format(str(traintest_seed))
+			snapshot_info_string += "_ttseed(p.u.)={}".format(str(traintest_seed))
 		else:
-			snapshot_info_string += "_traintestseed={}".format(str(traintest_seed))
+			snapshot_info_string += "_ttseed={}".format(str(traintest_seed))
 	if N is not None:
 		snapshot_info_string += "_N={}".format(str(N))
 	if mobility_string is not None:

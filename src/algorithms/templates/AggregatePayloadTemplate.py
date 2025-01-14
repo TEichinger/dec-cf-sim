@@ -154,7 +154,6 @@ class AggregatePayloadTemplate(metaclass = ABCMeta):
 			payload = payload.drop_duplicates(subset = ["itemId"], keep = "first")
 
 
-
 		elif self.algo_string in ("DecAggCFv6"):
 			""" Aggregate the pandas dataframes of the format
 				into a single aggregated rating dataframe without using aggregated similarities.

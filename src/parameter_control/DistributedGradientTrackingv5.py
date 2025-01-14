@@ -11,6 +11,8 @@ from parameter_control.ParameterControlTemplate import ParameterControlTemplate
 from utilities.util import convert_df_to_cornac_data
 
 import pandas as pd
+import numpy as np
+
 
 import cornac
 from cornac.experiment import Experiment
@@ -23,7 +25,7 @@ from cornac.metrics import RMSE#, MAE, Precision, Recall, NDCG, AUC, MAP
 from mobility_models.AssignNMobility import AssignNMobility
 
 
-class DistributedGradientTracking(ParameterControlTemplate):
+class DistributedGradientTrackingv5(ParameterControlTemplate):
 	""" Class that defines a Distributed Gradient Tracking (DGT) parameter control mechanism. DGT differs from Distributed Gradient Descent (DGD) in that we employ fixed gradients.
 		DGT has been used to address the speed-accuracy dilemma (source: Daneshmand et al. (2018) arXiv:1809.08694).
 
@@ -66,7 +68,7 @@ class DistributedGradientTracking(ParameterControlTemplate):
 		self.epsilon = epsilon
 
 		# parameter control string for future reference
-		self.parameter_control_string	= "DGT"
+		self.parameter_control_string	= "DGTv5"
 
 		#
 		self.val_df = val_df
@@ -84,7 +86,7 @@ class DistributedGradientTracking(ParameterControlTemplate):
 	# 2. UPDATE SIMULATION PARAMETERS [MAIN FUNCTIONALITY] #
 	########################################################
 
-	def update_formula(self, param_1, param_2, alpha_p, beta_p, epsilon, delta_performance, min_param_1 = None, max_param_1 = None,\
+	def update_formula(self, param_1, params_2, alpha_p, beta_p, epsilon, delta_performance, min_param_1 = None, max_param_1 = None,\
 				none_gradient = 1, zero_gradient = -1, saturation_gradient = -1, non_saturation_gradient = 0, use_consensus_term = True):
 		"""
 		DGT:	none_gradient = 1, zero_gradient = -1, saturation_gradient = -1, non_saturation_gradient = 0, use_consensus_term = True
@@ -120,8 +122,10 @@ class DistributedGradientTracking(ParameterControlTemplate):
 		"""
 		# consensus term
 		#################
+		print(params_2)
 		if use_consensus_term:
-			consensus_term = beta_p * (param_2 - param_1)
+			print(np.array([param_2 - param_1 for param_2 in params_2]))
+			consensus_term = beta_p * ( np.array([param_2 - param_1 for param_2 in params_2]).mean() )
 		else:
 			consensus_term = 0
 
@@ -141,11 +145,11 @@ class DistributedGradientTracking(ParameterControlTemplate):
 		#		* gradient of value 3 if the performance saturates
 		# 		* gradient of value 4 if the performance does not yet saturate
 		if delta_performance is None: # if no evaluation is possible, this indicates that the user still needs to collect data!
-			gradient = none_gradient #0
+			gradient = none_gradient / max(len(params_2),1)# NEW IN v5
 		elif abs(delta_performance) == 0: # no change in collected data
 			gradient = zero_gradient # 0
 		elif (abs(delta_performance)<epsilon ): # if performance differentials are small (< epsilon); change parameters to lower collection
-			gradient = saturation_gradient # 1
+			gradient = saturation_gradient * max(len(params_2),1)# NEW IN v5
 		else: # if performance differentials are large; do not change parameters
 			gradient = non_saturation_gradient# 0
 
@@ -281,12 +285,21 @@ class DistributedGradientTracking(ParameterControlTemplate):
 		for peer in self.algorithm.peers():
 			# if there are no children (no connections in this epoch): only consider the innovation term for parameter update
 			if children_dict[peer] == []:
-				new_time_horizon_dict[peer] = int(self.update_formula(current_time_horizon_dict[peer], 0, \
-											self.alpha_T, 0, self.epsilon,  delta_performances[self.algorithm.peers().index(peer)], min_param_1 = 0))
+				new_time_horizon_dict[peer] = int(self.update_formula(current_time_horizon_dict[peer], [0], \
+										self.alpha_T, 0, self.epsilon,  delta_performances[self.algorithm.peers().index(peer)], min_param_1 = 0))
+			# OLD:
+			#	new_time_horizon_dict[peer] = int(self.update_formula(current_time_horizon_dict[peer], 0, \
+			#								self.alpha_T, 0, self.epsilon,  delta_performances[self.algorithm.peers().index(peer)], min_param_1 = 0))
 			# if there are children (connections in this epoch): consider both consensus and innovation terms for parameter update
 			else:
-				new_time_horizon_dict[peer] = int(self.update_formula(current_time_horizon_dict[peer], current_time_horizon_dict[children_dict[peer][0]], \
+				print("children_dict[peer]", children_dict[peer]) #['2']
+				print("[current_time_horizon_dict[child] for child in children_dict[peer]]", [current_time_horizon_dict[child] for child in children_dict[peer]])
+
+				new_time_horizon_dict[peer] = int(self.update_formula(current_time_horizon_dict[peer], [current_time_horizon_dict[child] for child in children_dict[peer]], \
 											self.alpha_T, self.beta_T, self.epsilon,  delta_performances[self.algorithm.peers().index(peer)], min_param_1 = 0))
+				# OLD:
+				#new_time_horizon_dict[peer] = int(self.update_formula(current_time_horizon_dict[peer], current_time_horizon_dict[children_dict[peer][0]], \
+				#							self.alpha_T, self.beta_T, self.epsilon,  delta_performances[self.algorithm.peers().index(peer)], min_param_1 = 0))
 
 		# set new time horizons
 		self.algorithm.set_time_horizon_dict(new_time_horizon_dict)
@@ -299,11 +312,17 @@ class DistributedGradientTracking(ParameterControlTemplate):
 
 			if children_dict[peer] == []:
 				# if there are no children (no connections in this epoch): only consider the innovation term for parameter update
-				new_dynamic_percentile_dict[peer] = self.update_formula(self.algorithm.dynamic_percentile_dict[peer], 0,\
+				# OLD:
+				#new_dynamic_percentile_dict[peer] = self.update_formula(self.algorithm.dynamic_percentile_dict[peer], 0,\
+				#		self.alpha_dynamic_percentile, 0, self.epsilon, delta_performances[self.algorithm.peers().index(peer)], min_param_1 = 0.0, max_param_1 = 1.0)
+				new_dynamic_percentile_dict[peer] = self.update_formula(self.algorithm.dynamic_percentile_dict[peer], [0],\
 						self.alpha_dynamic_percentile, 0, self.epsilon, delta_performances[self.algorithm.peers().index(peer)], min_param_1 = 0.0, max_param_1 = 1.0)
 			else:
 				# if there are children (connections in this epoch): consider both consensus and innovation terms for parameter update
-				new_dynamic_percentile_dict[peer] = self.update_formula(self.algorithm.dynamic_percentile_dict[peer], self.algorithm.dynamic_percentile_dict[children_dict[peer][0]],\
+				# OLD:
+				#new_dynamic_percentile_dict[peer] = self.update_formula(self.algorithm.dynamic_percentile_dict[peer], self.algorithm.dynamic_percentile_dict[children_dict[peer][0]],\
+				#		self.alpha_dynamic_percentile, self.beta_dynamic_percentile, self.epsilon, delta_performances[self.algorithm.peers().index(peer)], min_param_1 = 0.0, max_param_1 = 1.0)
+				new_dynamic_percentile_dict[peer] = self.update_formula(self.algorithm.dynamic_percentile_dict[peer], [self.algorithm.dynamic_percentile_dict[child] for child in children_dict[peer]],\
 						self.alpha_dynamic_percentile, self.beta_dynamic_percentile, self.epsilon, delta_performances[self.algorithm.peers().index(peer)], min_param_1 = 0.0, max_param_1 = 1.0)
 
 		# set new dynamic percentiles

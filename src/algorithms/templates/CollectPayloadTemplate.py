@@ -14,8 +14,7 @@ class CollectPayloadTemplate(metaclass = ABCMeta):
 		""" Bundles behavior of the <collect_payload> method of the Algorithms with algo_strings ("DecAggCFv2", "DecAggCFv5", "DecShCFv2", "DecShCFv3", "DecCF")
 		For faster Search:
 
-			(I.1) <collect_payload> for "DecAggCFv2", "DecAggCFv5", "DecAggCFv6" "DecShCFv2", "DecShCFv3"
-			(I.3) 					for "DecCF"
+			(I.1) <collect_payload> for "DecAggCFv2", "DecAggCFv5", "DecAggCFv6" "DecShCFv2", "DecShCFv3", "DecCF"
 
 			(II.1) <fill_in_missing_columns> for "DecAggCFv2", "DecAggCFv5", "DecCF", "DecShCFv2", "DecShCFv3"
 
@@ -84,7 +83,6 @@ class CollectPayloadTemplate(metaclass = ABCMeta):
 			# We assume that profiles are anonymous for they represent multiple profiles. The "userId" column holds the data tenant's ID.
 			# We can only distinguish distinct contacts (by a combination of "sender" and "timestamp", assuming that every user only uses one peer in the network).
 			if self.algo_string in ("DecAggCFv2", "DecAggCFv5", "DecAggCFv6", "DecShCFv2", "DecShCFv3"):
-				child_children_without_child	= [el.split(":")[0] for el in self.graph.collect_history(child+":"+str(self.t-1), timestamp_delta = timestamp_delta)]
 				# ... and the corresponding timestamps at which the child and child_child met
 				# (Y)
 				# NOTE that the +1 is necessary since the then children are the now child_children
@@ -96,32 +94,98 @@ class CollectPayloadTemplate(metaclass = ABCMeta):
 				#							this includes the profile received at epoch 4 (see THEN). Since the collect_history returns the children including "2:3"
 				#							we need increment the epoch 3 by one.
 				# Recall that 	self.graph.collect_history(child+":"+str(t-1)) returns a list of "child:epoch" strings.
-				child_children_without_child_timestamps	= [str(int(el.split(":")[1])+1) for el in self.graph.collect_history(child+":"+str(t-1), timestamp_delta = timestamp_delta)]
-				# add child as child_child (*) always at the first (0-th position in the list)
-				child_children = [child] + child_children_without_child
-				# and a zero for the child
-				child_children_timestamps = [0] + child_children_without_child_timestamps
+				unique_combinations_of_child_children_and_timestamps = child_future_df.loc[:,["sender", "timestamp"]].drop_duplicates()
+
+				child_children_without_child			= unique_combinations_of_child_children_and_timestamps.loc[:, "sender"].tolist()
+				child_children_without_child_timestamps = unique_combinations_of_child_children_and_timestamps.loc[:, "timestamp"].tolist() # when connections are anonymous, the user cannot link the ratings by the same userId in child_future_df and assumes they come from distinct users although the userId indicates the source user.
+
+				# OLD: child_children_without_child	        = [        el.split(":")[0] for el in self.graph.collect_history(child+":"+str(t-1), timestamp_delta = timestamp_delta)]
+				# OLD: child_children_without_child_timestamps	= [str(int(el.split(":")[1])+1) for el in self.graph.collect_history(child+":" +str(t-1), timestamp_delta = timestamp_delta)]
+				#print("self.t", self.t)
+				#print("self.graph.collect_history(child+':'+str(self.t-1)", self.graph.collect_history(child+":"+str(self.t-1)))
+				#print("t", t)
+
+
 
 				# if contacts share rating data non-anonymously, we can identify contacts with the same peer between epochs
-				# since multiple contacts with the same peer lead to duplicates in child_children_without_child, we
-				# (1) drop duplicates here
-				# (2) select future snapshot dfs by "sender" instead of combinations of "sender" and "timestamp" in (X)
-				#
+				# since multiple contacts with the same peer lead to duplicates in child_children_without_child, we drop duplicates here (see also (X))
 				if not self.anonymous_contacts:
-					# (1) drop duplicate children (child is always the first element)
-					child_children					= list(dict.fromkeys(child_children)) # this version is slower than list(set(child_children)) yet is reproducible
-					child_children_without_child	= child_children[1:]              # slice at 1 since we exactly impute one child (at index 0) (cf. (*) and (**))
+					# (1) drop duplicate child_children_without_child, keep the most recent contact
+					# e.g.
+					# child_children_without_child            : "a", "b", "a"
+					# child_children_without_child_timestamps :   2,   2,   1
+					# -> d = {"b": 2, "a":2}; thus, we will not select the payload that the child collected from "a" at epoch 1 but the payload that child collected from "a" at epoch 2.
+					# aligned with the corresponding timestamps
+					d = dict()
+					for child_child_without_child, child_child_without_child_timestamp in zip(child_children_without_child, child_children_without_child_timestamps):
+					#for child_child_without_child, child_child_without_child_timestamp in zip(reversed(child_children_without_child), reversed(child_children_without_child_timestamps)): #USE THIS WITH THE COLLECT.HISTORY VERSION
+					    d[child_child_without_child] = child_child_without_child_timestamp
+
+					# if parent is in child_children_without_child; delete the parent and its associated timestamp in child_children
+					if parent in d.keys():
+						del d[parent]
+
+					child_children_without_child = list(d) #unique child_children
+					child_children_without_child_timestamps = [d[child_child_without_child] for child_child_without_child in d]
+
+					# OLD
+					#child_children					= list(dict.fromkeys(child_children)) # this version is slower than list(set(child_children)) yet is reproducible
+					#child_children_without_child	= child_children[1:]              # slice at 1 since we exactly impute one child (at index 0) (cf. (*) and (**))
+					# TODO: drop the corresponding timestamps, and select down below the most recent payload.
+					# TODO: pick the most recent one!
+					# TODO: filter also the parent (AND its corresponding time stamp)
+					# COMMENT: for anonymous we do not filter by the most recent one,
+				# add child as child_child (*) always at the first (0-th position in the list)
+				child_children = [child] + child_children_without_child
+				# and a zero 0 (timestamp) for the child that denotes the profile of child (before any data collection at timestamp t = 0)
+				child_children_timestamps = [0] + child_children_without_child_timestamps
+
+				#print("self.graph.collect_history(child+':' +str(t-1)",self.graph.collect_history(child+":" +str(t-1)))
+				#print("child_children_without_child", child_children_without_child)
+				#print("child_children_without_child_timestamps", child_children_without_child_timestamps)
+
+				##################################
+				#unique_combinations_of_child_children_and_timestamps = child_future_df.loc[:,["sender", "timestamp"]].drop_duplicates()
+
+				#child_children_without_child_test			= unique_combinations_of_child_children_and_timestamps.loc[:, "sender"].tolist()
+				#child_children_without_child_timestamps_test = unique_combinations_of_child_children_and_timestamps.loc[:, "timestamp"].tolist() # when connections are anonymous, the user cannot link the ratings by the same userId in child_future_df and assumes they come from distinct users although the userId indicates the source user.
+
+				# add the child (sender) as a child_child
+				#child_children_test            = [child] + child_children_without_child_test
+				# also as a timestamp t=0
+				#child_children_timestamps_test =     [0] + child_children_without_child_timestamps_test
+				#print("child_children_without_child_test", child_children_without_child_test)
+				#print("child_children_without_child_timestamps_test", child_children_without_child_timestamps_test)
 
 
 			# No Profile Aggregation.
-			# We assume that profiles are not anonymous, which is why the "userId" column holds the data originator's ID, and we drop duplicates.
+			# anonymous_contacts == True means that
+			# the child cannot distinguish between child_children and the parent.
 			elif self.algo_string in ("DecCF"):
-				child_children_without_child	= child_future_df.loc[:,"userId"].drop_duplicates().tolist()
-				# filter out the parent's profile data, which could have been collected by child up until (t-1) via mutually similar other peers
-				# consequently future_dfs do not contain any ratings by child
-				child_children_without_child	= [child_child for child_child in child_children_without_child if child_child != parent]
-				child_children = [child] + child_children_without_child
+				if self.anonymous_contacts:
+					unique_combinations_of_child_children_and_timestamps = child_future_df.loc[:,["userId", "timestamp"]].drop_duplicates()
 
+					child_children_without_child			= unique_combinations_of_child_children_and_timestamps.loc[:, "userId"].tolist()
+					child_children_without_child_timestamps = unique_combinations_of_child_children_and_timestamps.loc[:, "timestamp"].tolist() # when connections are anonymous, the user cannot link the ratings by the same userId in child_future_df and assumes they come from distinct users although the userId indicates the source user.
+
+					# add the child (sender) as a child_child
+					child_children            = [child] + child_children_without_child
+					# also as a timestamp t=0
+					child_children_timestamps =     [0] + child_children_without_child_timestamps
+
+				else:
+					# ORIGINAL
+					child_children_without_child	= child_future_df.loc[:,"userId"].drop_duplicates().tolist()
+					# filter out the parent's profile data, which could have been collected by child up until (t-1) via mutually similar other peers
+					# the parent does not need the parents own profile anymore, that's why we filter this out here.
+					# consequently future_dfs do not contain any ratings by child
+					#
+					child_children_without_child	= [child_child for child_child in child_children_without_child if child_child != parent]
+
+
+					child_children = [child] + child_children_without_child
+
+			# For Step 2.1.2, we require [child_children] AND [child_children_timestamps] to select the candidate dataframes (dfs) to include into the payload.
 
 			###########################################################################################################
 			# 1. CALCULATE SIMILARITY BETWEEN CHILD AND PARENT                                                        #
@@ -153,10 +217,11 @@ class CollectPayloadTemplate(metaclass = ABCMeta):
 				# 2.1.1 CALCULATE CANDIDATE SIMILARITIES                                                              #
 				#######################################################################################################
 				if self.hide_p is None:
-					if self.algo_string in ("DecAggCFv2", "DecAggCFv6", "DecShCFv2", "DecCF"):											# here child_children were unq_child_children
+					if self.algo_string in ("DecAggCFv2", "DecAggCFv5", "DecAggCFv6", "DecShCFv2", "DecShCFv3", "DecCF"):
 						payload_candidate_sims_without_child = [self.fetch_similarity(parent, child_child) for child_child in child_children_without_child]
-					elif self.algo_string in ("DecAggCFv5", "DecShCFv3"):
-						payload_candidate_sims_without_child = [self.fetch_similarity(child,  child_child) for child_child in child_children_without_child]
+								# here child_children were unq_child_children
+					#elif self.algo_string in ("DecAggCFv6", "DecShCFv3"):
+					#	payload_candidate_sims_without_child = [self.fetch_similarity(child,  child_child) for child_child in child_children_without_child]
 				else:
 					# TODO: make this work for all experiments!
 					########
@@ -189,17 +254,19 @@ class CollectPayloadTemplate(metaclass = ABCMeta):
 				else: #                                                                                -1 is required since the timestamps are incremented by one (see (Y))
 					# if profile aggregation is performed, the aggregated profile is represented by 'sender'
 					if self.algo_string in ("DecAggCFv2", "DecAggCFv5", "DecAggCFv6", "DecShCFv2", "DecShCFv3"):
-						# (X)
-						if self.anonymous_contacts:
-							# (1) select future snapshots dfs by distinct combinations of "sender" and "timestamp"
-							#	  (multiple contacts between epochs cannot be distinguished)
-							payload_candidate_dfs_without_child = [child_future_df.loc[(child_future_df["sender"] == child_child) & (child_future_df["timestamp"] == int(timestamp)-1)].copy() \
-										for child_child, timestamp in zip(child_children_without_child, child_children_without_child_timestamps)]
-						else:
-							# (2) select future snapshot dfs by distinc "sender"
-							#	  (multiple contacts between epochs can be distinguished)
-							payload_candidate_dfs_without_child = [child_future_df.loc[(child_future_df["sender"] == child_child)].copy() \
-													for child_child in child_children_without_child]
+						payload_candidate_dfs_without_child = [child_future_df.loc[(child_future_df["sender"] == child_child) & (child_future_df["timestamp"] == int(timestamp)-1)].copy() \
+											for child_child, timestamp in zip(child_children_without_child, child_children_without_child_timestamps)]
+						#	# (X)
+						#	if self.anonymous_contacts:
+						#		# (1) select future snapshots dfs by distinct combinations of "sender" and "timestamp"
+						#		#	  (multiple contacts between epochs cannot be distinguished and are thus treated as distinct payload_candidate_dfs
+						#		payload_candidate_dfs_without_child = [child_future_df.loc[(child_future_df["sender"] == child_child) & (child_future_df["timestamp"] == int(timestamp)-1)].copy() \
+						#					for child_child, timestamp in zip(child_children_without_child, child_children_without_child_timestamps)]
+						#	else:
+						#		# (2) select future snapshot dfs by distinct "sender"
+						#		#	  (multiple contacts between epochs can be distinguished)
+						#		payload_candidate_dfs_without_child = [child_future_df.loc[(child_future_df["sender"] == child_child)].copy() \
+						#								for child_child in child_children_without_child]
 					# elif no profile aggregation is to be performed, we have to retrieve the individual profiles via "userId", which represents the data originator's ID
 					elif self.algo_string in ("DecCF"):
 						# here we assume again that profiles do not change over time, else this has to be adjusted
@@ -264,11 +331,14 @@ class CollectPayloadTemplate(metaclass = ABCMeta):
 			# 2.2 ELSE FORM AN EMPTY PAYLOAD                                                                          #
 			###########################################################################################################
 			else:
-				# else return and empty DataFrame
+				# else return an empty DataFrame
 				payload = self.default_snapshot_row()
 
 			return payload
 
+	def filter_our_parent(child_children, parent):
+		child_children_without_parent	= [child_child for child_child in child_children if child_child != parent]
+		return child_children_without_parent
 
 
 	def fill_in_missing_columns(self, candidate_df, ref_userId, candidate_sim, child, t, omit_agg_sim = False):
